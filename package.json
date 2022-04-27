@@ -2,8 +2,7 @@
   "name": "action-digitalocean-droplet-blue-green",
   "description": "Use the DigitalOcean API to swap a `blue` and `green` droplet instance",
   "scripts": {
-    "build": "ncc build src/main.ts --source-map --minifiy --license licenses.txt",
-    "compile": "tsc --project tsconfig.json",
+    "build": "tsc --project tsconfig.json",
     "format": "eslint --fix src/**/*.ts",
     "lint": "eslint src/**/*.ts",
     "test": "ava"
