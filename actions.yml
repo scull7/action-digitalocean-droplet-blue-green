@@ -1,0 +1,19 @@
+name: 'DigitalOcean Droplet Blue/Green Deploy'
+description: 'Use the DigitalOcean API to swap a `blue` and `green` droplet instance'
+inputs:
+  digital_ocean_access_token:
+    description: 'Access token for the Digital Ocean API'
+    required: true
+  droplet_pair_tag:
+    description: 'Dropet tag which identifies the 2 instances that make up the blue/green pair'
+    required: true
+  ip_green:
+    description: 'Floating IP Address for the GREEN instance'
+    required: true
+  ip_blue:
+    description: 'Floating IP Address for the BLUE instance'
+    required: true
+runs:
+  using: 'node16'
+  main: 'dist/index.js'
+
