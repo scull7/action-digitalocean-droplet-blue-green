@@ -12,7 +12,9 @@ export interface IDroplet {
 
 export function toResource(droplet: IDroplet): IResource {
   return {
-    resource_id: droplet.id,
+    // Server side Go code will fail on conversion unless we output a string
+    // value in the JSON.
+    resource_id: droplet.id.toString(),
     resource_type: ResourceType.DROPLET,
   }
 }
