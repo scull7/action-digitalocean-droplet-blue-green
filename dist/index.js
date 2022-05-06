@@ -221,7 +221,7 @@ const resource_1 = __nccwpck_require__(358);
 const MAX_ALLOWED_PER_PAGE = '200';
 function toResource(droplet) {
     return {
-        resource_id: droplet.id,
+        resource_id: droplet.id.toString(),
         resource_type: resource_1.ResourceType.DROPLET,
     };
 }

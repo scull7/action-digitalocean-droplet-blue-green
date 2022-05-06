@@ -10,6 +10,13 @@ export interface ITag {
   resources: IResourceList,
 }
 
+function ensureResourceIDsAreStrings(resources: IResource[]) {
+  return resources.map(resource => ({
+    ...resource,
+    resource_id: resource.resource_id.toString(),
+  }));
+}
+
 export async function get(
   api: IApi,
   tag_name: string,
@@ -30,6 +37,7 @@ export async function add(
   resources: IResource[],
 ): Promise<null> {
   const parser = (_res: any) => null;
+  resources = ensureResourceIDsAreStrings(resources);
 
   return api.post(parser, `/tags/${tag_name}/resources`, { resources });
 }
@@ -39,6 +47,8 @@ export async function remove(
   tag_name: string,
   resources: IResource[],
 ): Promise<void> {
+  resources = ensureResourceIDsAreStrings(resources);
+
   return api.del(`/tags/${tag_name}/resources`, { resources });
 }
 
