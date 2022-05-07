@@ -63,10 +63,8 @@ export async function run(
   core.info(`PROMOTING ${dropletGreen.name} (ID=${dropletGreen.id}) to GREEN, IP=${ipGreen.ip}`);
   core.info(`DEMOTING ${dropletBlue.name} (ID=${dropletBlue.id}) to BLUE, IP=${ipBlue.ip}`);
 
-  await Promise.all([
-    FloatingIP.waitThenAssign(api, timeout, ipGreen, dropletGreen),
-    FloatingIP.waitThenAssign(api, timeout, ipBlue, dropletBlue),
-  ]);
+  await FloatingIP.waitThenAssign(api, timeout, ipGreen, dropletGreen),
+  await FloatingIP.waitThenAssign(api, timeout, ipBlue, dropletBlue),
 
   await Promise.all([
     Tag.add(api, tagSet.green, [ Droplet.toResource(dropletGreen) ]),
