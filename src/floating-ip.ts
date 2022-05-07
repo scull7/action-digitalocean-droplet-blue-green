@@ -8,7 +8,7 @@ import type { ITimeout } from './timeout';
 type IPv4 = string;
 
 const RETRY_COUNT = 3;
-const DELAY_MILLIS = 1000; // 1 second
+const DELAY_MILLIS = 5000; // 5 seconds
 
 export interface IFloatingIP {
   droplet?: IDroplet,
