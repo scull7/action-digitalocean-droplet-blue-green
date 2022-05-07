@@ -1,6 +1,23 @@
 require('./sourcemap-register.js');/******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
+/***/ 139:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ActionStatus = void 0;
+var ActionStatus;
+(function (ActionStatus) {
+    ActionStatus["COMPLETED"] = "completed";
+    ActionStatus["ERRORED"] = "errored";
+    ActionStatus["IN_PROGRESS"] = "in-progress";
+})(ActionStatus = exports.ActionStatus || (exports.ActionStatus = {}));
+
+
+/***/ }),
+
 /***/ 947:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -29,10 +46,14 @@ var __importStar = (this && this.__importStar) || function (mod) {
     __setModuleDefault(result, mod);
     return result;
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Api = void 0;
 const Path = __importStar(__nccwpck_require__(17));
 const url_1 = __nccwpck_require__(310);
+const http_errors_1 = __importDefault(__nccwpck_require__(193));
 const DIGITAL_OCEAN_API_DOMAIN = 'api.digitalocean.com';
 const DIGITAL_OCEAN_API_PROTOCOL = 'https';
 const DIGITAL_OCEAN_API_VERSION = 'v2';
@@ -125,8 +146,9 @@ function getError(req, res, body) {
     }
     const url = req.url.toString();
     const prefix = body.id ? body.id.toUpperCase() : 'UNKNOWN';
-    const message = body.message ? body.message : 'Message was empty';
-    return new Error(`${prefix} (${statusCode}): ${url} :: ${message}`);
+    let message = body.message ? body.message : 'Message was empty';
+    message = `${prefix} (${statusCode}): ${url} :: ${message}`;
+    return (0, http_errors_1.default)(statusCode, message);
 }
 
 
@@ -251,12 +273,25 @@ exports.getByTag = getByTag;
 /***/ }),
 
 /***/ 878:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.unassign = exports.assign = exports.getByIp = void 0;
+exports.waitThenAssign = exports.waitForInProgressActions = exports.unassign = exports.assign = exports.getByIp = exports.getActions = void 0;
+const action_1 = __nccwpck_require__(139);
+const RETRY_COUNT = 3;
+const DELAY_MILLIS = 5000;
+async function getActions(api, ip_address) {
+    const parser = (res) => {
+        if (Array.isArray(res.actions)) {
+            return res.actions;
+        }
+        return [];
+    };
+    return api.get(parser, `/floating_ips/${ip_address.ip}/actions`);
+}
+exports.getActions = getActions;
 async function getByIp(api, ip_address) {
     const parser = (res) => {
         if (res.floating_ip) {
@@ -267,17 +302,29 @@ async function getByIp(api, ip_address) {
     return api.get(parser, `/floating_ips/${ip_address}`);
 }
 exports.getByIp = getByIp;
-async function assign(api, floating_ip, droplet) {
+async function assign(api, floating_ip, droplet, retryCount = RETRY_COUNT) {
     const parser = (res) => {
         if (res.action) {
             return res.action;
         }
         return null;
     };
-    return api.post(parser, `/floating_ips/${floating_ip.ip}/actions`, {
-        type: 'assign',
-        droplet_id: droplet.id,
-    });
+    const delay = (millis) => new Promise((resolve, _reject) => setTimeout(() => resolve(), millis));
+    try {
+        return await api.post(parser, `/floating_ips/${floating_ip.ip}/actions`, {
+            type: 'assign',
+            droplet_id: droplet.id,
+        });
+    }
+    catch (err) {
+        if (err.status === 422 && retryCount > 0) {
+            await delay(DELAY_MILLIS);
+            return assign(api, floating_ip, droplet, retryCount - 1);
+        }
+        else {
+            throw err;
+        }
+    }
 }
 exports.assign = assign;
 async function unassign(api, floating_ip) {
@@ -290,6 +337,25 @@ async function unassign(api, floating_ip) {
     return api.post(parser, `/floating_ips/${floating_ip.ip}/actions`, { type: 'unassign' });
 }
 exports.unassign = unassign;
+async function waitForInProgressActions(api, timeout, ip_address) {
+    let hasInProgress = true;
+    const start = timeout.getStart();
+    const isInProgress = (action) => action_1.ActionStatus.IN_PROGRESS === action.status;
+    while (hasInProgress) {
+        const actions = await getActions(api, ip_address);
+        hasInProgress = actions == null ? false : actions.some(isInProgress);
+        if (timeout.hasExpired(start)) {
+            throw new Error(`Timed out awaiting actions for IP = ${ip_address.ip}`);
+        }
+    }
+    return;
+}
+exports.waitForInProgressActions = waitForInProgressActions;
+async function waitThenAssign(api, timeout, ip_address, droplet) {
+    await waitForInProgressActions(api, timeout, ip_address);
+    return assign(api, ip_address, droplet);
+}
+exports.waitThenAssign = waitThenAssign;
 
 
 /***/ }),
@@ -325,11 +391,13 @@ var __importStar = (this && this.__importStar) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(186));
 const http_client_1 = __nccwpck_require__(925);
+const Timeout = __importStar(__nccwpck_require__(863));
 const Step = __importStar(__nccwpck_require__(610));
 const TAG_SET = {
     blue: 'blue',
     green: 'green',
 };
+const THIRTY_SECONDS = 30000;
 function httpClientFactory(options) {
     const userAgent = undefined;
     const handlers = undefined;
@@ -337,7 +405,8 @@ function httpClientFactory(options) {
 }
 async function main() {
     try {
-        await Step.run({ core, httpClientFactory, tagSet: TAG_SET });
+        const timeout = Timeout.make(THIRTY_SECONDS);
+        await Step.run({ core, httpClientFactory, tagSet: TAG_SET, timeout, });
         core.info('Docker Blue / Green Promotion Complete!');
     }
     catch (err) {
@@ -402,7 +471,7 @@ const Context = __importStar(__nccwpck_require__(842));
 const Droplet = __importStar(__nccwpck_require__(545));
 const FloatingIP = __importStar(__nccwpck_require__(878));
 const Tag = __importStar(__nccwpck_require__(829));
-async function run({ core, httpClientFactory, tagSet }) {
+async function run({ core, httpClientFactory, tagSet, timeout }) {
     const context = Context.make(core);
     const api = Context.getAPI(context, httpClientFactory);
     const [ipGreen, ipBlue] = await Context.getGreenAndBlueFloatingIPs(api, context);
@@ -425,14 +494,12 @@ async function run({ core, httpClientFactory, tagSet }) {
     const [dropletGreen, dropletBlue] = getDropletAssignments(ipGreen, ipBlue, droplet1, droplet2);
     core.info(`PROMOTING ${dropletGreen.name} (ID=${dropletGreen.id}) to GREEN, IP=${ipGreen.ip}`);
     core.info(`DEMOTING ${dropletBlue.name} (ID=${dropletBlue.id}) to BLUE, IP=${ipBlue.ip}`);
-    await Promise.all([
-        FloatingIP.assign(api, ipGreen, dropletGreen),
-        FloatingIP.assign(api, ipBlue, dropletBlue),
-    ]);
-    await Promise.all([
-        Tag.add(api, tagSet.green, [Droplet.toResource(dropletGreen)]),
-        Tag.add(api, tagSet.blue, [Droplet.toResource(dropletBlue)]),
-    ]);
+    await FloatingIP.waitThenAssign(api, timeout, ipGreen, dropletGreen),
+        await FloatingIP.waitThenAssign(api, timeout, ipBlue, dropletBlue),
+        await Promise.all([
+            Tag.add(api, tagSet.green, [Droplet.toResource(dropletGreen)]),
+            Tag.add(api, tagSet.blue, [Droplet.toResource(dropletBlue)]),
+        ]);
     return;
 }
 exports.run = run;
@@ -461,6 +528,12 @@ exports.getDropletAssignments = getDropletAssignments;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.removeList = exports.remove = exports.add = exports.get = void 0;
+function ensureResourceIDsAreStrings(resources) {
+    return resources.map(resource => ({
+        ...resource,
+        resource_id: resource.resource_id.toString(),
+    }));
+}
 async function get(api, tag_name) {
     const parser = (res) => {
         if (res.tag) {
@@ -473,10 +546,12 @@ async function get(api, tag_name) {
 exports.get = get;
 async function add(api, tag_name, resources) {
     const parser = (_res) => null;
+    resources = ensureResourceIDsAreStrings(resources);
     return api.post(parser, `/tags/${tag_name}/resources`, { resources });
 }
 exports.add = add;
 async function remove(api, tag_name, resources) {
+    resources = ensureResourceIDsAreStrings(resources);
     return api.del(`/tags/${tag_name}/resources`, { resources });
 }
 exports.remove = remove;
@@ -484,6 +559,30 @@ async function removeList(api, tag_name_list, resources) {
     return Promise.all(tag_name_list.map((tag_name) => remove(api, tag_name, resources)));
 }
 exports.removeList = removeList;
+
+
+/***/ }),
+
+/***/ 863:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.make = void 0;
+const defaultNow = () => new Date().getTime();
+function make(timeoutMillis, injectedNow) {
+    const now = injectedNow == null ? defaultNow : injectedNow;
+    return {
+        getStart() {
+            return new Date().getTime();
+        },
+        hasExpired(start) {
+            return (now() - start) >= timeoutMillis;
+        },
+    };
+}
+exports.make = make;
 
 
 /***/ }),
@@ -2053,6 +2152,1117 @@ exports.checkBypass = checkBypass;
 
 /***/ }),
 
+/***/ 883:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/*!
+ * depd
+ * Copyright(c) 2014-2018 Douglas Christopher Wilson
+ * MIT Licensed
+ */
+
+/**
+ * Module dependencies.
+ */
+
+var relative = (__nccwpck_require__(17).relative)
+
+/**
+ * Module exports.
+ */
+
+module.exports = depd
+
+/**
+ * Get the path to base files on.
+ */
+
+var basePath = process.cwd()
+
+/**
+ * Determine if namespace is contained in the string.
+ */
+
+function containsNamespace (str, namespace) {
+  var vals = str.split(/[ ,]+/)
+  var ns = String(namespace).toLowerCase()
+
+  for (var i = 0; i < vals.length; i++) {
+    var val = vals[i]
+
+    // namespace contained
+    if (val && (val === '*' || val.toLowerCase() === ns)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+/**
+ * Convert a data descriptor to accessor descriptor.
+ */
+
+function convertDataDescriptorToAccessor (obj, prop, message) {
+  var descriptor = Object.getOwnPropertyDescriptor(obj, prop)
+  var value = descriptor.value
+
+  descriptor.get = function getter () { return value }
+
+  if (descriptor.writable) {
+    descriptor.set = function setter (val) { return (value = val) }
+  }
+
+  delete descriptor.value
+  delete descriptor.writable
+
+  Object.defineProperty(obj, prop, descriptor)
+
+  return descriptor
+}
+
+/**
+ * Create arguments string to keep arity.
+ */
+
+function createArgumentsString (arity) {
+  var str = ''
+
+  for (var i = 0; i < arity; i++) {
+    str += ', arg' + i
+  }
+
+  return str.substr(2)
+}
+
+/**
+ * Create stack string from stack.
+ */
+
+function createStackString (stack) {
+  var str = this.name + ': ' + this.namespace
+
+  if (this.message) {
+    str += ' deprecated ' + this.message
+  }
+
+  for (var i = 0; i < stack.length; i++) {
+    str += '\n    at ' + stack[i].toString()
+  }
+
+  return str
+}
+
+/**
+ * Create deprecate for namespace in caller.
+ */
+
+function depd (namespace) {
+  if (!namespace) {
+    throw new TypeError('argument namespace is required')
+  }
+
+  var stack = getStack()
+  var site = callSiteLocation(stack[1])
+  var file = site[0]
+
+  function deprecate (message) {
+    // call to self as log
+    log.call(deprecate, message)
+  }
+
+  deprecate._file = file
+  deprecate._ignored = isignored(namespace)
+  deprecate._namespace = namespace
+  deprecate._traced = istraced(namespace)
+  deprecate._warned = Object.create(null)
+
+  deprecate.function = wrapfunction
+  deprecate.property = wrapproperty
+
+  return deprecate
+}
+
+/**
+ * Determine if event emitter has listeners of a given type.
+ *
+ * The way to do this check is done three different ways in Node.js >= 0.8
+ * so this consolidates them into a minimal set using instance methods.
+ *
+ * @param {EventEmitter} emitter
+ * @param {string} type
+ * @returns {boolean}
+ * @private
+ */
+
+function eehaslisteners (emitter, type) {
+  var count = typeof emitter.listenerCount !== 'function'
+    ? emitter.listeners(type).length
+    : emitter.listenerCount(type)
+
+  return count > 0
+}
+
+/**
+ * Determine if namespace is ignored.
+ */
+
+function isignored (namespace) {
+  if (process.noDeprecation) {
+    // --no-deprecation support
+    return true
+  }
+
+  var str = process.env.NO_DEPRECATION || ''
+
+  // namespace ignored
+  return containsNamespace(str, namespace)
+}
+
+/**
+ * Determine if namespace is traced.
+ */
+
+function istraced (namespace) {
+  if (process.traceDeprecation) {
+    // --trace-deprecation support
+    return true
+  }
+
+  var str = process.env.TRACE_DEPRECATION || ''
+
+  // namespace traced
+  return containsNamespace(str, namespace)
+}
+
+/**
+ * Display deprecation message.
+ */
+
+function log (message, site) {
+  var haslisteners = eehaslisteners(process, 'deprecation')
+
+  // abort early if no destination
+  if (!haslisteners && this._ignored) {
+    return
+  }
+
+  var caller
+  var callFile
+  var callSite
+  var depSite
+  var i = 0
+  var seen = false
+  var stack = getStack()
+  var file = this._file
+
+  if (site) {
+    // provided site
+    depSite = site
+    callSite = callSiteLocation(stack[1])
+    callSite.name = depSite.name
+    file = callSite[0]
+  } else {
+    // get call site
+    i = 2
+    depSite = callSiteLocation(stack[i])
+    callSite = depSite
+  }
+
+  // get caller of deprecated thing in relation to file
+  for (; i < stack.length; i++) {
+    caller = callSiteLocation(stack[i])
+    callFile = caller[0]
+
+    if (callFile === file) {
+      seen = true
+    } else if (callFile === this._file) {
+      file = this._file
+    } else if (seen) {
+      break
+    }
+  }
+
+  var key = caller
+    ? depSite.join(':') + '__' + caller.join(':')
+    : undefined
+
+  if (key !== undefined && key in this._warned) {
+    // already warned
+    return
+  }
+
+  this._warned[key] = true
+
+  // generate automatic message from call site
+  var msg = message
+  if (!msg) {
+    msg = callSite === depSite || !callSite.name
+      ? defaultMessage(depSite)
+      : defaultMessage(callSite)
+  }
+
+  // emit deprecation if listeners exist
+  if (haslisteners) {
+    var err = DeprecationError(this._namespace, msg, stack.slice(i))
+    process.emit('deprecation', err)
+    return
+  }
+
+  // format and write message
+  var format = process.stderr.isTTY
+    ? formatColor
+    : formatPlain
+  var output = format.call(this, msg, caller, stack.slice(i))
+  process.stderr.write(output + '\n', 'utf8')
+}
+
+/**
+ * Get call site location as array.
+ */
+
+function callSiteLocation (callSite) {
+  var file = callSite.getFileName() || '<anonymous>'
+  var line = callSite.getLineNumber()
+  var colm = callSite.getColumnNumber()
+
+  if (callSite.isEval()) {
+    file = callSite.getEvalOrigin() + ', ' + file
+  }
+
+  var site = [file, line, colm]
+
+  site.callSite = callSite
+  site.name = callSite.getFunctionName()
+
+  return site
+}
+
+/**
+ * Generate a default message from the site.
+ */
+
+function defaultMessage (site) {
+  var callSite = site.callSite
+  var funcName = site.name
+
+  // make useful anonymous name
+  if (!funcName) {
+    funcName = '<anonymous@' + formatLocation(site) + '>'
+  }
+
+  var context = callSite.getThis()
+  var typeName = context && callSite.getTypeName()
+
+  // ignore useless type name
+  if (typeName === 'Object') {
+    typeName = undefined
+  }
+
+  // make useful type name
+  if (typeName === 'Function') {
+    typeName = context.name || typeName
+  }
+
+  return typeName && callSite.getMethodName()
+    ? typeName + '.' + funcName
+    : funcName
+}
+
+/**
+ * Format deprecation message without color.
+ */
+
+function formatPlain (msg, caller, stack) {
+  var timestamp = new Date().toUTCString()
+
+  var formatted = timestamp +
+    ' ' + this._namespace +
+    ' deprecated ' + msg
+
+  // add stack trace
+  if (this._traced) {
+    for (var i = 0; i < stack.length; i++) {
+      formatted += '\n    at ' + stack[i].toString()
+    }
+
+    return formatted
+  }
+
+  if (caller) {
+    formatted += ' at ' + formatLocation(caller)
+  }
+
+  return formatted
+}
+
+/**
+ * Format deprecation message with color.
+ */
+
+function formatColor (msg, caller, stack) {
+  var formatted = '\x1b[36;1m' + this._namespace + '\x1b[22;39m' + // bold cyan
+    ' \x1b[33;1mdeprecated\x1b[22;39m' + // bold yellow
+    ' \x1b[0m' + msg + '\x1b[39m' // reset
+
+  // add stack trace
+  if (this._traced) {
+    for (var i = 0; i < stack.length; i++) {
+      formatted += '\n    \x1b[36mat ' + stack[i].toString() + '\x1b[39m' // cyan
+    }
+
+    return formatted
+  }
+
+  if (caller) {
+    formatted += ' \x1b[36m' + formatLocation(caller) + '\x1b[39m' // cyan
+  }
+
+  return formatted
+}
+
+/**
+ * Format call site location.
+ */
+
+function formatLocation (callSite) {
+  return relative(basePath, callSite[0]) +
+    ':' + callSite[1] +
+    ':' + callSite[2]
+}
+
+/**
+ * Get the stack as array of call sites.
+ */
+
+function getStack () {
+  var limit = Error.stackTraceLimit
+  var obj = {}
+  var prep = Error.prepareStackTrace
+
+  Error.prepareStackTrace = prepareObjectStackTrace
+  Error.stackTraceLimit = Math.max(10, limit)
+
+  // capture the stack
+  Error.captureStackTrace(obj)
+
+  // slice this function off the top
+  var stack = obj.stack.slice(1)
+
+  Error.prepareStackTrace = prep
+  Error.stackTraceLimit = limit
+
+  return stack
+}
+
+/**
+ * Capture call site stack from v8.
+ */
+
+function prepareObjectStackTrace (obj, stack) {
+  return stack
+}
+
+/**
+ * Return a wrapped function in a deprecation message.
+ */
+
+function wrapfunction (fn, message) {
+  if (typeof fn !== 'function') {
+    throw new TypeError('argument fn must be a function')
+  }
+
+  var args = createArgumentsString(fn.length)
+  var stack = getStack()
+  var site = callSiteLocation(stack[1])
+
+  site.name = fn.name
+
+  // eslint-disable-next-line no-new-func
+  var deprecatedfn = new Function('fn', 'log', 'deprecate', 'message', 'site',
+    '"use strict"\n' +
+    'return function (' + args + ') {' +
+    'log.call(deprecate, message, site)\n' +
+    'return fn.apply(this, arguments)\n' +
+    '}')(fn, log, this, message, site)
+
+  return deprecatedfn
+}
+
+/**
+ * Wrap property in a deprecation message.
+ */
+
+function wrapproperty (obj, prop, message) {
+  if (!obj || (typeof obj !== 'object' && typeof obj !== 'function')) {
+    throw new TypeError('argument obj must be object')
+  }
+
+  var descriptor = Object.getOwnPropertyDescriptor(obj, prop)
+
+  if (!descriptor) {
+    throw new TypeError('must call property on owner object')
+  }
+
+  if (!descriptor.configurable) {
+    throw new TypeError('property must be configurable')
+  }
+
+  var deprecate = this
+  var stack = getStack()
+  var site = callSiteLocation(stack[1])
+
+  // set site name
+  site.name = prop
+
+  // convert data descriptor
+  if ('value' in descriptor) {
+    descriptor = convertDataDescriptorToAccessor(obj, prop, message)
+  }
+
+  var get = descriptor.get
+  var set = descriptor.set
+
+  // wrap getter
+  if (typeof get === 'function') {
+    descriptor.get = function getter () {
+      log.call(deprecate, message, site)
+      return get.apply(this, arguments)
+    }
+  }
+
+  // wrap setter
+  if (typeof set === 'function') {
+    descriptor.set = function setter () {
+      log.call(deprecate, message, site)
+      return set.apply(this, arguments)
+    }
+  }
+
+  Object.defineProperty(obj, prop, descriptor)
+}
+
+/**
+ * Create DeprecationError for deprecation
+ */
+
+function DeprecationError (namespace, message, stack) {
+  var error = new Error()
+  var stackString
+
+  Object.defineProperty(error, 'constructor', {
+    value: DeprecationError
+  })
+
+  Object.defineProperty(error, 'message', {
+    configurable: true,
+    enumerable: false,
+    value: message,
+    writable: true
+  })
+
+  Object.defineProperty(error, 'name', {
+    enumerable: false,
+    configurable: true,
+    value: 'DeprecationError',
+    writable: true
+  })
+
+  Object.defineProperty(error, 'namespace', {
+    configurable: true,
+    enumerable: false,
+    value: namespace,
+    writable: true
+  })
+
+  Object.defineProperty(error, 'stack', {
+    configurable: true,
+    enumerable: false,
+    get: function () {
+      if (stackString !== undefined) {
+        return stackString
+      }
+
+      // prepare stack trace
+      return (stackString = createStackString.call(this, stack))
+    },
+    set: function setter (val) {
+      stackString = val
+    }
+  })
+
+  return error
+}
+
+
+/***/ }),
+
+/***/ 193:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+/*!
+ * http-errors
+ * Copyright(c) 2014 Jonathan Ong
+ * Copyright(c) 2016 Douglas Christopher Wilson
+ * MIT Licensed
+ */
+
+
+
+/**
+ * Module dependencies.
+ * @private
+ */
+
+var deprecate = __nccwpck_require__(883)('http-errors')
+var setPrototypeOf = __nccwpck_require__(414)
+var statuses = __nccwpck_require__(415)
+var inherits = __nccwpck_require__(124)
+var toIdentifier = __nccwpck_require__(399)
+
+/**
+ * Module exports.
+ * @public
+ */
+
+module.exports = createError
+module.exports.HttpError = createHttpErrorConstructor()
+module.exports.isHttpError = createIsHttpErrorFunction(module.exports.HttpError)
+
+// Populate exports for all constructors
+populateConstructorExports(module.exports, statuses.codes, module.exports.HttpError)
+
+/**
+ * Get the code class of a status code.
+ * @private
+ */
+
+function codeClass (status) {
+  return Number(String(status).charAt(0) + '00')
+}
+
+/**
+ * Create a new HTTP Error.
+ *
+ * @returns {Error}
+ * @public
+ */
+
+function createError () {
+  // so much arity going on ~_~
+  var err
+  var msg
+  var status = 500
+  var props = {}
+  for (var i = 0; i < arguments.length; i++) {
+    var arg = arguments[i]
+    var type = typeof arg
+    if (type === 'object' && arg instanceof Error) {
+      err = arg
+      status = err.status || err.statusCode || status
+    } else if (type === 'number' && i === 0) {
+      status = arg
+    } else if (type === 'string') {
+      msg = arg
+    } else if (type === 'object') {
+      props = arg
+    } else {
+      throw new TypeError('argument #' + (i + 1) + ' unsupported type ' + type)
+    }
+  }
+
+  if (typeof status === 'number' && (status < 400 || status >= 600)) {
+    deprecate('non-error status code; use only 4xx or 5xx status codes')
+  }
+
+  if (typeof status !== 'number' ||
+    (!statuses.message[status] && (status < 400 || status >= 600))) {
+    status = 500
+  }
+
+  // constructor
+  var HttpError = createError[status] || createError[codeClass(status)]
+
+  if (!err) {
+    // create error
+    err = HttpError
+      ? new HttpError(msg)
+      : new Error(msg || statuses.message[status])
+    Error.captureStackTrace(err, createError)
+  }
+
+  if (!HttpError || !(err instanceof HttpError) || err.status !== status) {
+    // add properties to generic error
+    err.expose = status < 500
+    err.status = err.statusCode = status
+  }
+
+  for (var key in props) {
+    if (key !== 'status' && key !== 'statusCode') {
+      err[key] = props[key]
+    }
+  }
+
+  return err
+}
+
+/**
+ * Create HTTP error abstract base class.
+ * @private
+ */
+
+function createHttpErrorConstructor () {
+  function HttpError () {
+    throw new TypeError('cannot construct abstract class')
+  }
+
+  inherits(HttpError, Error)
+
+  return HttpError
+}
+
+/**
+ * Create a constructor for a client error.
+ * @private
+ */
+
+function createClientErrorConstructor (HttpError, name, code) {
+  var className = toClassName(name)
+
+  function ClientError (message) {
+    // create the error object
+    var msg = message != null ? message : statuses.message[code]
+    var err = new Error(msg)
+
+    // capture a stack trace to the construction point
+    Error.captureStackTrace(err, ClientError)
+
+    // adjust the [[Prototype]]
+    setPrototypeOf(err, ClientError.prototype)
+
+    // redefine the error message
+    Object.defineProperty(err, 'message', {
+      enumerable: true,
+      configurable: true,
+      value: msg,
+      writable: true
+    })
+
+    // redefine the error name
+    Object.defineProperty(err, 'name', {
+      enumerable: false,
+      configurable: true,
+      value: className,
+      writable: true
+    })
+
+    return err
+  }
+
+  inherits(ClientError, HttpError)
+  nameFunc(ClientError, className)
+
+  ClientError.prototype.status = code
+  ClientError.prototype.statusCode = code
+  ClientError.prototype.expose = true
+
+  return ClientError
+}
+
+/**
+ * Create function to test is a value is a HttpError.
+ * @private
+ */
+
+function createIsHttpErrorFunction (HttpError) {
+  return function isHttpError (val) {
+    if (!val || typeof val !== 'object') {
+      return false
+    }
+
+    if (val instanceof HttpError) {
+      return true
+    }
+
+    return val instanceof Error &&
+      typeof val.expose === 'boolean' &&
+      typeof val.statusCode === 'number' && val.status === val.statusCode
+  }
+}
+
+/**
+ * Create a constructor for a server error.
+ * @private
+ */
+
+function createServerErrorConstructor (HttpError, name, code) {
+  var className = toClassName(name)
+
+  function ServerError (message) {
+    // create the error object
+    var msg = message != null ? message : statuses.message[code]
+    var err = new Error(msg)
+
+    // capture a stack trace to the construction point
+    Error.captureStackTrace(err, ServerError)
+
+    // adjust the [[Prototype]]
+    setPrototypeOf(err, ServerError.prototype)
+
+    // redefine the error message
+    Object.defineProperty(err, 'message', {
+      enumerable: true,
+      configurable: true,
+      value: msg,
+      writable: true
+    })
+
+    // redefine the error name
+    Object.defineProperty(err, 'name', {
+      enumerable: false,
+      configurable: true,
+      value: className,
+      writable: true
+    })
+
+    return err
+  }
+
+  inherits(ServerError, HttpError)
+  nameFunc(ServerError, className)
+
+  ServerError.prototype.status = code
+  ServerError.prototype.statusCode = code
+  ServerError.prototype.expose = false
+
+  return ServerError
+}
+
+/**
+ * Set the name of a function, if possible.
+ * @private
+ */
+
+function nameFunc (func, name) {
+  var desc = Object.getOwnPropertyDescriptor(func, 'name')
+
+  if (desc && desc.configurable) {
+    desc.value = name
+    Object.defineProperty(func, 'name', desc)
+  }
+}
+
+/**
+ * Populate the exports object with constructors for every error class.
+ * @private
+ */
+
+function populateConstructorExports (exports, codes, HttpError) {
+  codes.forEach(function forEachCode (code) {
+    var CodeError
+    var name = toIdentifier(statuses.message[code])
+
+    switch (codeClass(code)) {
+      case 400:
+        CodeError = createClientErrorConstructor(HttpError, name, code)
+        break
+      case 500:
+        CodeError = createServerErrorConstructor(HttpError, name, code)
+        break
+    }
+
+    if (CodeError) {
+      // export the constructor
+      exports[code] = CodeError
+      exports[name] = CodeError
+    }
+  })
+}
+
+/**
+ * Get a class name from a name identifier.
+ * @private
+ */
+
+function toClassName (name) {
+  return name.substr(-5) !== 'Error'
+    ? name + 'Error'
+    : name
+}
+
+
+/***/ }),
+
+/***/ 124:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+try {
+  var util = __nccwpck_require__(837);
+  /* istanbul ignore next */
+  if (typeof util.inherits !== 'function') throw '';
+  module.exports = util.inherits;
+} catch (e) {
+  /* istanbul ignore next */
+  module.exports = __nccwpck_require__(544);
+}
+
+
+/***/ }),
+
+/***/ 544:
+/***/ ((module) => {
+
+if (typeof Object.create === 'function') {
+  // implementation from standard node.js 'util' module
+  module.exports = function inherits(ctor, superCtor) {
+    if (superCtor) {
+      ctor.super_ = superCtor
+      ctor.prototype = Object.create(superCtor.prototype, {
+        constructor: {
+          value: ctor,
+          enumerable: false,
+          writable: true,
+          configurable: true
+        }
+      })
+    }
+  };
+} else {
+  // old school shim for old browsers
+  module.exports = function inherits(ctor, superCtor) {
+    if (superCtor) {
+      ctor.super_ = superCtor
+      var TempCtor = function () {}
+      TempCtor.prototype = superCtor.prototype
+      ctor.prototype = new TempCtor()
+      ctor.prototype.constructor = ctor
+    }
+  }
+}
+
+
+/***/ }),
+
+/***/ 414:
+/***/ ((module) => {
+
+"use strict";
+
+/* eslint no-proto: 0 */
+module.exports = Object.setPrototypeOf || ({ __proto__: [] } instanceof Array ? setProtoOf : mixinProperties)
+
+function setProtoOf (obj, proto) {
+  obj.__proto__ = proto
+  return obj
+}
+
+function mixinProperties (obj, proto) {
+  for (var prop in proto) {
+    if (!Object.prototype.hasOwnProperty.call(obj, prop)) {
+      obj[prop] = proto[prop]
+    }
+  }
+  return obj
+}
+
+
+/***/ }),
+
+/***/ 415:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+/*!
+ * statuses
+ * Copyright(c) 2014 Jonathan Ong
+ * Copyright(c) 2016 Douglas Christopher Wilson
+ * MIT Licensed
+ */
+
+
+
+/**
+ * Module dependencies.
+ * @private
+ */
+
+var codes = __nccwpck_require__(855)
+
+/**
+ * Module exports.
+ * @public
+ */
+
+module.exports = status
+
+// status code to message map
+status.message = codes
+
+// status message (lower-case) to code map
+status.code = createMessageToStatusCodeMap(codes)
+
+// array of status codes
+status.codes = createStatusCodeList(codes)
+
+// status codes for redirects
+status.redirect = {
+  300: true,
+  301: true,
+  302: true,
+  303: true,
+  305: true,
+  307: true,
+  308: true
+}
+
+// status codes for empty bodies
+status.empty = {
+  204: true,
+  205: true,
+  304: true
+}
+
+// status codes for when you should retry the request
+status.retry = {
+  502: true,
+  503: true,
+  504: true
+}
+
+/**
+ * Create a map of message to status code.
+ * @private
+ */
+
+function createMessageToStatusCodeMap (codes) {
+  var map = {}
+
+  Object.keys(codes).forEach(function forEachCode (code) {
+    var message = codes[code]
+    var status = Number(code)
+
+    // populate map
+    map[message.toLowerCase()] = status
+  })
+
+  return map
+}
+
+/**
+ * Create a list of all status codes.
+ * @private
+ */
+
+function createStatusCodeList (codes) {
+  return Object.keys(codes).map(function mapCode (code) {
+    return Number(code)
+  })
+}
+
+/**
+ * Get the status code for given message.
+ * @private
+ */
+
+function getStatusCode (message) {
+  var msg = message.toLowerCase()
+
+  if (!Object.prototype.hasOwnProperty.call(status.code, msg)) {
+    throw new Error('invalid status message: "' + message + '"')
+  }
+
+  return status.code[msg]
+}
+
+/**
+ * Get the status message for given code.
+ * @private
+ */
+
+function getStatusMessage (code) {
+  if (!Object.prototype.hasOwnProperty.call(status.message, code)) {
+    throw new Error('invalid status code: ' + code)
+  }
+
+  return status.message[code]
+}
+
+/**
+ * Get the status code.
+ *
+ * Given a number, this will throw if it is not a known status
+ * code, otherwise the code will be returned. Given a string,
+ * the string will be parsed for a number and return the code
+ * if valid, otherwise will lookup the code assuming this is
+ * the status message.
+ *
+ * @param {string|number} code
+ * @returns {number}
+ * @public
+ */
+
+function status (code) {
+  if (typeof code === 'number') {
+    return getStatusMessage(code)
+  }
+
+  if (typeof code !== 'string') {
+    throw new TypeError('code must be a number or string')
+  }
+
+  // '403'
+  var n = parseInt(code, 10)
+  if (!isNaN(n)) {
+    return getStatusMessage(n)
+  }
+
+  return getStatusCode(code)
+}
+
+
+/***/ }),
+
+/***/ 399:
+/***/ ((module) => {
+
+"use strict";
+/*!
+ * toidentifier
+ * Copyright(c) 2016 Douglas Christopher Wilson
+ * MIT Licensed
+ */
+
+
+
+/**
+ * Module exports.
+ * @public
+ */
+
+module.exports = toIdentifier
+
+/**
+ * Trasform the given string into a JavaScript identifier
+ *
+ * @param {string} str
+ * @returns {string}
+ * @public
+ */
+
+function toIdentifier (str) {
+  return str
+    .split(' ')
+    .map(function (token) {
+      return token.slice(0, 1).toUpperCase() + token.slice(1)
+    })
+    .join('')
+    .replace(/[^ _0-9a-z]/gi, '')
+}
+
+
+/***/ }),
+
 /***/ 294:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -2418,6 +3628,14 @@ module.exports = require("url");
 
 "use strict";
 module.exports = require("util");
+
+/***/ }),
+
+/***/ 855:
+/***/ ((module) => {
+
+"use strict";
+module.exports = JSON.parse('{"100":"Continue","101":"Switching Protocols","102":"Processing","103":"Early Hints","200":"OK","201":"Created","202":"Accepted","203":"Non-Authoritative Information","204":"No Content","205":"Reset Content","206":"Partial Content","207":"Multi-Status","208":"Already Reported","226":"IM Used","300":"Multiple Choices","301":"Moved Permanently","302":"Found","303":"See Other","304":"Not Modified","305":"Use Proxy","307":"Temporary Redirect","308":"Permanent Redirect","400":"Bad Request","401":"Unauthorized","402":"Payment Required","403":"Forbidden","404":"Not Found","405":"Method Not Allowed","406":"Not Acceptable","407":"Proxy Authentication Required","408":"Request Timeout","409":"Conflict","410":"Gone","411":"Length Required","412":"Precondition Failed","413":"Payload Too Large","414":"URI Too Long","415":"Unsupported Media Type","416":"Range Not Satisfiable","417":"Expectation Failed","418":"I\'m a Teapot","421":"Misdirected Request","422":"Unprocessable Entity","423":"Locked","424":"Failed Dependency","425":"Too Early","426":"Upgrade Required","428":"Precondition Required","429":"Too Many Requests","431":"Request Header Fields Too Large","451":"Unavailable For Legal Reasons","500":"Internal Server Error","501":"Not Implemented","502":"Bad Gateway","503":"Service Unavailable","504":"Gateway Timeout","505":"HTTP Version Not Supported","506":"Variant Also Negotiates","507":"Insufficient Storage","508":"Loop Detected","509":"Bandwidth Limit Exceeded","510":"Not Extended","511":"Network Authentication Required"}');
 
 /***/ })
 
