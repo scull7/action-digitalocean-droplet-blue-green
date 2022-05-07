@@ -1,5 +1,6 @@
 import * as Path from 'path';
 import { URL, URLSearchParams } from 'url';
+import createError from 'http-errors';
 import {
   IHttpClient,
   IHttpClientResponse,
@@ -169,7 +170,8 @@ function getError(
 
   const url = req.url.toString();
   const prefix = body.id ? body.id.toUpperCase() : 'UNKNOWN';
-  const message = body.message ? body.message : 'Message was empty';
+  let message = body.message ? body.message : 'Message was empty';
+  message = `${prefix} (${statusCode}): ${url} :: ${message}`;
 
-  return new Error(`${prefix} (${statusCode}): ${url} :: ${message}`);
+  return createError(statusCode, message);
 }
