@@ -7,6 +7,9 @@ import type { ITimeout } from './timeout';
 
 type IPv4 = string;
 
+const RETRY_COUNT = 3;
+const DELAY_MILLIS = 1000; // 1 second
+
 export interface IFloatingIP {
   droplet?: IDroplet,
   locked: boolean,
@@ -47,6 +50,7 @@ export async function assign(
   api: IApi,
   floating_ip: IFloatingIP,
   droplet: IDroplet,
+  retryCount: number = RETRY_COUNT,
 ): Promise<IAction> {
   const parser = (res: any) => {
     if (res.action) {
@@ -55,10 +59,26 @@ export async function assign(
     return null;
   };
 
-  return api.post(parser, `/floating_ips/${floating_ip.ip}/actions`, {
-    type: 'assign',
-    droplet_id: droplet.id,
-  });
+  const delay = (millis: number): Promise<void> =>
+    new Promise((resolve, _reject) => setTimeout(() => resolve(), millis));
+
+  try {
+    return await api.post(parser, `/floating_ips/${floating_ip.ip}/actions`, {
+      type: 'assign',
+      droplet_id: droplet.id,
+    });
+  } catch (err) {
+    // UNPROCESSABLE_ENTITY (422): The floating IP already has a pending event
+    // We should await the previous event.
+    if (err.status === 422 && retryCount > 0) {
+      await delay(DELAY_MILLIS);
+
+      return assign(api, floating_ip, droplet, retryCount - 1);
+
+    } else {
+      throw err;
+    }
+  }
 }
 
 // @TODO - implement wait for action to complete.
