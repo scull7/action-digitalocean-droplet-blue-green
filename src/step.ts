@@ -7,6 +7,7 @@ import type { IDroplet } from './droplet';
 import * as FloatingIP from './floating-ip';
 import type { IFloatingIP } from './floating-ip';
 import * as Tag from './tag';
+import type { ITimeout } from './timeout';
 
 export interface ICore {
   info: (message: string) => void;
@@ -23,10 +24,11 @@ export interface IStepOptions {
   core: ICore,
   httpClientFactory: (options: IRequestOptions) => IHttpClient,
   tagSet: ITagSet,
+  timeout: ITimeout,
 }
 
 export async function run(
-  { core, httpClientFactory, tagSet }: IStepOptions
+  { core, httpClientFactory, tagSet, timeout }: IStepOptions
 ): Promise<void> {
   const context = Context.make(core);
 
@@ -62,8 +64,8 @@ export async function run(
   core.info(`DEMOTING ${dropletBlue.name} (ID=${dropletBlue.id}) to BLUE, IP=${ipBlue.ip}`);
 
   await Promise.all([
-    FloatingIP.assign(api, ipGreen, dropletGreen),
-    FloatingIP.assign(api, ipBlue, dropletBlue),
+    FloatingIP.waitThenAssign(api, timeout, ipGreen, dropletGreen),
+    FloatingIP.waitThenAssign(api, timeout, ipBlue, dropletBlue),
   ]);
 
   await Promise.all([
