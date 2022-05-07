@@ -95,6 +95,74 @@ const success = (config) => (options)  => {
   });
 
   store.expectReq({
+    verb: 'GET',
+    path: `/floating_ips/${ipGreen.ip}/actions`,
+    reply: {
+      status: 200,
+      body: {
+        "actions": [
+          {
+            "id": 72531856,
+            "status": "completed",
+            "type": "reserve_ip",
+            "started_at": "2015-11-21T21:51:09.000Z",
+            "completed_at": "2015-11-21T21:51:09.000Z",
+            "resource_id": 758604197,
+            "resource_type": "floating_ip",
+            "region": {
+              "name": "New York 3",
+              "slug": "nyc3",
+              "sizes": [
+                "s-1vcpu-1gb",
+                "s-1vcpu-2gb",
+                "s-1vcpu-3gb",
+                "s-2vcpu-2gb",
+                "s-3vcpu-1gb",
+                "s-2vcpu-4gb",
+                "s-4vcpu-8gb",
+                "s-6vcpu-16gb",
+                "s-8vcpu-32gb",
+                "s-12vcpu-48gb",
+                "s-16vcpu-64gb",
+                "s-20vcpu-96gb",
+                "s-24vcpu-128gb",
+                "s-32vcpu-192gb"
+              ],
+              "features": [
+                "private_networking",
+                "backups",
+                "ipv6",
+                "metadata"
+              ],
+              "available": true
+            },
+            "region_slug": "nyc3"
+          }
+        ],
+        "links": {},
+        "meta": {
+          "total": 1
+        }
+      },
+    },
+  });
+
+  store.expectReq({
+    verb: 'GET',
+    path: `/floating_ips/${ipBlue.ip}/actions`,
+    reply: {
+      status: 200,
+      body: {
+        "actions": [],
+        "links": {},
+        "meta": {
+          "total": 0,
+        },
+      },
+    },
+  });
+
+  store.expectReq({
     verb: 'POST',
     path: `/floating_ips/${ipGreen.ip}/actions`,
     data: { type: 'unassign' },

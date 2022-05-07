@@ -14,6 +14,12 @@ const tagSet = {
   blue: 'test-blue',
 };
 
+const timeout = {
+  getStart: () => 1,
+
+  hasExpired: (_start) => false,
+};
+
 test('It should fail when not given a digital_ocean_access_token', async (t) => {
   const httpClientFactory = (options) => {
     return new HttpClient(undefined, undefined, options);
@@ -67,7 +73,7 @@ test('It should perform a blue to green promotion', async (t) => {
   
   const httpClientFactory = HttpClientFactory.success(config);
 
-  await Step.run({ core, httpClientFactory, tagSet });
+  await Step.run({ core, httpClientFactory, tagSet, timeout });
 
   t.assert(infoStub.calledWith(`Droplet #1 = ${droplet1.name}`));
   t.assert(infoStub.calledWith(`Droplet #2 = ${droplet2.name}`));
@@ -125,7 +131,7 @@ test('It should assign droplet1 to green and droplet2 to blue when neither IP is
   
   const httpClientFactory = HttpClientFactory.success(config);
 
-  await Step.run({ core, httpClientFactory, tagSet });
+  await Step.run({ core, httpClientFactory, tagSet, timeout });
 
   t.assert(infoStub.calledWith(`Droplet #1 = ${droplet1.name}`));
   t.assert(infoStub.calledWith(`Droplet #2 = ${droplet2.name}`));
@@ -184,7 +190,7 @@ test('It should assign droplet1 to green and droplet2 to blue when only the blue
   
   const httpClientFactory = HttpClientFactory.success(config);
 
-  await Step.run({ core, httpClientFactory, tagSet });
+  await Step.run({ core, httpClientFactory, tagSet, timeout });
 
   t.assert(infoStub.calledWith(`Droplet #1 = ${droplet1.name}`));
   t.assert(infoStub.calledWith(`Droplet #2 = ${droplet2.name}`));
@@ -243,7 +249,7 @@ test('It should assign droplet2 to green and droplet1 to blue when only the gree
   
   const httpClientFactory = HttpClientFactory.success(config);
 
-  await Step.run({ core, httpClientFactory, tagSet });
+  await Step.run({ core, httpClientFactory, tagSet, timeout });
 
   t.assert(infoStub.calledWith(`Droplet #1 = ${droplet1.name}`));
   t.assert(infoStub.calledWith(`Droplet #2 = ${droplet2.name}`));
@@ -302,7 +308,7 @@ test('It should assign droplet1 to green and droplet2 to blue when only the blue
   
   const httpClientFactory = HttpClientFactory.success(config);
 
-  await Step.run({ core, httpClientFactory, tagSet });
+  await Step.run({ core, httpClientFactory, tagSet, timeout });
 
   t.assert(infoStub.calledWith(`Droplet #1 = ${droplet1.name}`));
   t.assert(infoStub.calledWith(`Droplet #2 = ${droplet2.name}`));
@@ -361,7 +367,7 @@ test('It should assign droplet1 to green and droplet2 to blue when only the gree
   
   const httpClientFactory = HttpClientFactory.success(config);
 
-  await Step.run({ core, httpClientFactory, tagSet });
+  await Step.run({ core, httpClientFactory, tagSet, timeout });
 
   t.assert(infoStub.calledWith(`Droplet #1 = ${droplet1.name}`));
   t.assert(infoStub.calledWith(`Droplet #2 = ${droplet2.name}`));
